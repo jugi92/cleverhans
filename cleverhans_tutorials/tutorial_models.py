@@ -10,6 +10,8 @@ from __future__ import unicode_literals
 import numpy as np
 import tensorflow as tf
 from cleverhans.model import Model
+from distutils.version import LooseVersion
+import warnings
 
 
 class MLP(Model):
@@ -50,6 +52,14 @@ class MLP(Model):
         states = dict(zip(self.get_layer_names(), states))
         return states
 
+    def get_params(self):
+        out = []
+        for layer in self.layers:
+            for param in layer.get_params():
+                if param not in out:
+                    out.append(param)
+        return out
+
 
 class Layer(object):
 
@@ -67,13 +77,26 @@ class Linear(Layer):
         self.input_shape = [batch_size, dim]
         self.output_shape = [batch_size, self.num_hid]
         init = tf.random_normal([dim, self.num_hid], dtype=tf.float32)
-        init = init / tf.sqrt(1e-7 + tf.reduce_sum(tf.square(init), axis=0,
-                                                   keep_dims=True))
+        if LooseVersion(tf.__version__) < LooseVersion('1.8.0'):
+            warning = "Running on tensorflow version " + \
+                       LooseVersion(tf.__version__).vstring + \
+                       ". This version will not be supported by CleverHans" + \
+                       "in the future."
+            warnings.warn(warning)
+            init_square_sum = tf.reduce_sum(tf.square(init),
+                                            axis=0, keep_dims=True)
+        else:
+            init_square_sum = tf.reduce_sum(tf.square(init),
+                                            axis=0, keepdims=True)
+        init = init / tf.sqrt(1e-7 + init_square_sum)
         self.W = tf.Variable(init)
         self.b = tf.Variable(np.zeros((self.num_hid,)).astype('float32'))
 
     def fprop(self, x):
         return tf.matmul(x, self.W) + self.b
+
+    def get_params(self):
+        return [self.W, self.b]
 
 
 class Conv2D(Layer):
@@ -106,6 +129,9 @@ class Conv2D(Layer):
         return tf.nn.conv2d(x, self.kernels, (1,) + tuple(self.strides) + (1,),
                             self.padding) + self.b
 
+    def get_params(self):
+        return [self.kernels, self.b]
+
 
 class ReLU(Layer):
 
@@ -119,6 +145,9 @@ class ReLU(Layer):
     def fprop(self, x):
         return tf.nn.relu(x)
 
+    def get_params(self):
+        return []
+
 
 class Softmax(Layer):
 
@@ -131,6 +160,9 @@ class Softmax(Layer):
 
     def fprop(self, x):
         return tf.nn.softmax(x)
+
+    def get_params(self):
+        return []
 
 
 class Flatten(Layer):
@@ -148,6 +180,9 @@ class Flatten(Layer):
 
     def fprop(self, x):
         return tf.reshape(x, [-1, self.output_width])
+
+    def get_params(self):
+        return []
 
 
 def make_basic_cnn(nb_filters=64, nb_classes=10,
